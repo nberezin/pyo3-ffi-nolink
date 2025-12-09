@@ -67,6 +67,7 @@ extern "C" {
     #[cfg_attr(PyPy, link_name = "PyPyDict_DelItemString")]
     pub fn PyDict_DelItemString(dp: *mut PyObject, key: *const c_char) -> c_int;
     #[cfg(Py_3_13)]
+    #[cfg_attr(PyPy, link_name = "PyPyDict_GetItemRef")]
     pub fn PyDict_GetItemRef(
         dp: *mut PyObject,
         key: *mut PyObject,
@@ -117,4 +118,4 @@ extern "C" {
 
 #[cfg(any(PyPy, GraalPy, Py_LIMITED_API))]
 // TODO: remove (see https://github.com/PyO3/pyo3/pull/1341#issuecomment-751515985)
-opaque_struct!(PyDictObject);
+opaque_struct!(pub PyDictObject);
