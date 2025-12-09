@@ -4,13 +4,7 @@ use libc::size_t;
 use std::os::raw::{c_char, c_double, c_int, c_long, c_longlong, c_ulong, c_ulonglong, c_void};
 use std::ptr::addr_of_mut;
 
-opaque_struct!(PyLongObject);
-
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPyLong_Type")]
-    pub static mut PyLong_Type: PyTypeObject;
-}
+opaque_struct!(pub PyLongObject);
 
 #[inline]
 pub unsafe fn PyLong_Check(op: *mut PyObject) -> c_int {
