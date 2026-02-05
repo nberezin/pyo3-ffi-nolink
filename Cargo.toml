@@ -13,7 +13,7 @@
 edition = "2021"
 rust-version = "1.74"
 name = "pyo3-ffi"
-version = "0.27.1"
+version = "0.23.5"
 authors = ["PyO3 Project and Contributors <https://github.com/PyO3>"]
 build = "build.rs"
 autolib = false
@@ -39,7 +39,7 @@ repository = "https://github.com/pyo3/pyo3"
 
 [package.metadata.cpython]
 min-version = "3.7"
-max-version = "3.14"
+max-version = "3.13"
 
 [package.metadata.pypy]
 min-version = "3.11"
@@ -56,16 +56,8 @@ abi3-py311 = [
     "pyo3-build-config/abi3-py311",
 ]
 abi3-py312 = [
-    "abi3-py313",
-    "pyo3-build-config/abi3-py312",
-]
-abi3-py313 = [
-    "abi3-py314",
-    "pyo3-build-config/abi3-py313",
-]
-abi3-py314 = [
     "abi3",
-    "pyo3-build-config/abi3-py314",
+    "pyo3-build-config/abi3-py312",
 ]
 abi3-py37 = [
     "abi3-py38",
