@@ -1,29 +1,17 @@
-use crate::object::*;
-#[cfg(not(any(PyPy, GraalPy, Py_LIMITED_API, Py_3_10)))]
-use crate::pyarena::PyArena;
 use crate::PyCompilerFlags;
+use crate::object::*;
+#[cfg(not(any(PyPy, GraalPy, Py_3_10)))]
+use crate::pyarena::PyArena;
 #[cfg(not(any(PyPy, GraalPy, Py_3_10)))]
 use crate::{_mod, _node};
+use core::ffi::{c_char, c_int};
 use libc::FILE;
-use std::ffi::{c_char, c_int};
 
-extern "C" {
+extern_libpython! {
     pub fn PyRun_SimpleStringFlags(arg1: *const c_char, arg2: *mut PyCompilerFlags) -> c_int;
-    pub fn _PyRun_SimpleFileObject(
-        fp: *mut FILE,
-        filename: *mut PyObject,
-        closeit: c_int,
-        flags: *mut PyCompilerFlags,
-    ) -> c_int;
     pub fn PyRun_AnyFileExFlags(
         fp: *mut FILE,
         filename: *const c_char,
-        closeit: c_int,
-        flags: *mut PyCompilerFlags,
-    ) -> c_int;
-    pub fn _PyRun_AnyFileObject(
-        fp: *mut FILE,
-        filename: *mut PyObject,
         closeit: c_int,
         flags: *mut PyCompilerFlags,
     ) -> c_int;
@@ -46,11 +34,6 @@ extern "C" {
     pub fn PyRun_InteractiveLoopFlags(
         fp: *mut FILE,
         filename: *const c_char,
-        flags: *mut PyCompilerFlags,
-    ) -> c_int;
-    pub fn _PyRun_InteractiveLoopObject(
-        fp: *mut FILE,
-        filename: *mut PyObject,
         flags: *mut PyCompilerFlags,
     ) -> c_int;
 
@@ -94,9 +77,7 @@ extern "C" {
         errcode: *mut c_int,
         arena: *mut PyArena,
     ) -> *mut _mod;
-}
 
-extern "C" {
     #[cfg_attr(PyPy, link_name = "PyPyRun_StringFlags")]
     pub fn PyRun_StringFlags(
         arg1: *const c_char,
@@ -116,6 +97,10 @@ extern "C" {
         flags: *mut PyCompilerFlags,
     ) -> *mut PyObject;
 
+    // skipped Py_CompileString - there is a symbol defined for this since Python 3.13
+    // but the symbol is overridden by a macro definition to call Py_CompileStringExFlags
+    // inline (see below)
+
     #[cfg(not(any(PyPy, GraalPy)))]
     pub fn Py_CompileStringExFlags(
         str: *const c_char,
@@ -124,7 +109,6 @@ extern "C" {
         flags: *mut PyCompilerFlags,
         optimize: c_int,
     ) -> *mut PyObject;
-    #[cfg(not(Py_LIMITED_API))]
     pub fn Py_CompileStringObject(
         str: *const c_char,
         filename: *mut PyObject,
@@ -137,7 +121,7 @@ extern "C" {
 #[inline]
 #[cfg(not(any(PyPy, GraalPy)))]
 pub unsafe fn Py_CompileString(string: *const c_char, p: *const c_char, s: c_int) -> *mut PyObject {
-    Py_CompileStringExFlags(string, p, s, std::ptr::null_mut(), -1)
+    Py_CompileStringExFlags(string, p, s, core::ptr::null_mut(), -1)
 }
 
 #[inline]
@@ -151,9 +135,7 @@ pub unsafe fn Py_CompileStringFlags(
     Py_CompileStringExFlags(string, p, s, f, -1)
 }
 
-// skipped _Py_SourceAsString
-
-extern "C" {
+extern_libpython! {
     #[cfg_attr(PyPy, link_name = "PyPyRun_String")]
     pub fn PyRun_String(
         string: *const c_char,
@@ -171,7 +153,7 @@ extern "C" {
         arg2: *const c_char,
         arg3: *mut PyCompilerFlags,
     ) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyRun_SimpleString")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyRun_SimpleString")]
     pub fn PyRun_SimpleString(s: *const c_char) -> c_int;
     #[cfg(not(any(PyPy, GraalPy)))]
     pub fn PyRun_SimpleFile(f: *mut FILE, p: *const c_char) -> c_int;
@@ -214,16 +196,16 @@ extern "C" {
 // skipped macro PyRun_AnyFileEx
 // skipped macro PyRun_AnyFileFlags
 
-extern "C" {
+extern_libpython! {
     #[cfg(not(any(PyPy, GraalPy, Py_3_10)))]
-    #[cfg_attr(Py_3_9, deprecated(note = "Python 3.9"))]
+    #[deprecated(note = "Python 3.9")]
     pub fn PyParser_SimpleParseStringFlags(
         arg1: *const c_char,
         arg2: c_int,
         arg3: c_int,
     ) -> *mut _node;
     #[cfg(not(any(PyPy, GraalPy, Py_3_10)))]
-    #[cfg_attr(Py_3_9, deprecated(note = "Python 3.9"))]
+    #[deprecated(note = "Python 3.9")]
     pub fn PyParser_SimpleParseStringFlagsFilename(
         arg1: *const c_char,
         arg2: *const c_char,
@@ -231,7 +213,7 @@ extern "C" {
         arg4: c_int,
     ) -> *mut _node;
     #[cfg(not(any(PyPy, GraalPy, Py_3_10)))]
-    #[cfg_attr(Py_3_9, deprecated(note = "Python 3.9"))]
+    #[deprecated(note = "Python 3.9")]
     pub fn PyParser_SimpleParseFileFlags(
         arg1: *mut FILE,
         arg2: *const c_char,

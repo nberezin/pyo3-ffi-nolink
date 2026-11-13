@@ -1,7 +1,7 @@
 use crate::object::PyTypeObject;
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
+extern_libpython! {
     pub static mut PyEnum_Type: PyTypeObject;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyReversed_Type")]
     pub static mut PyReversed_Type: PyTypeObject;
 }

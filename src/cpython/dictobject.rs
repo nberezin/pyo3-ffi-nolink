@@ -1,8 +1,17 @@
+#[cfg(all(GraalPy, Py_3_13))]
+use crate::PyObject;
+#[cfg(not(GraalPy))]
 use crate::object::*;
-#[cfg(not(PyPy))]
+#[cfg(not(any(PyPy, GraalPy)))]
 use crate::pyport::Py_ssize_t;
-#[cfg(not(PyPy))]
-use std::ffi::c_int;
+
+#[cfg(Py_3_15)]
+use crate::{PyDict_CheckExact, dictobject::PyDict_Check};
+
+#[cfg(all(not(PyPy), Py_3_13))]
+use core::ffi::c_char;
+#[cfg(Py_3_12)]
+use core::ffi::c_int;
 
 #[cfg(not(PyPy))]
 opaque_struct!(pub PyDictKeysObject);
@@ -40,61 +49,99 @@ pub struct PyDictObject {
     _tmpkeys: *mut PyObject,
 }
 
-extern "C" {
-    // skipped _PyDict_GetItem_KnownHash
-    // skipped _PyDict_GetItemIdWithError
-    // skipped _PyDict_GetItemStringWithError
-    // skipped PyDict_SetDefault
-    #[cfg(not(PyPy))]
-    pub fn _PyDict_SetItem_KnownHash(
+extern_libpython! {
+    #[cfg(Py_3_15)]
+    pub static mut PyFrozenDict_Type: PyTypeObject;
+}
+
+#[inline]
+#[cfg(Py_3_15)]
+pub unsafe fn PyFrozenDict_CheckExact(op: *mut PyObject) -> c_int {
+    Py_IS_TYPE(op, &raw mut PyFrozenDict_Type)
+}
+
+#[inline]
+#[cfg(Py_3_15)]
+pub unsafe fn PyFrozenDict_Check(op: *mut PyObject) -> c_int {
+    PyObject_TypeCheck(op, &raw mut PyFrozenDict_Type)
+}
+
+#[inline]
+#[cfg(Py_3_15)]
+pub unsafe fn PyAnyDict_Check(op: *mut PyObject) -> c_int {
+    (PyDict_Check(op) != 0 || PyFrozenDict_Check(op) != 0) as c_int
+}
+
+#[inline]
+#[cfg(Py_3_15)]
+pub unsafe fn PyAnyDict_CheckExact(op: *mut PyObject) -> c_int {
+    (PyDict_CheckExact(op) != 0 || PyFrozenDict_CheckExact(op) != 0) as c_int
+}
+
+// skipped private _PyDict_GetItem_KnownHash
+// skipped private _PyDict_GetItemStringWithError
+
+extern_libpython! {
+    #[cfg(not(GraalPy))]
+    #[cfg_attr(PyPy, link_name = "PyPyDict_SetDefault")]
+    pub fn PyDict_SetDefault(
         mp: *mut PyObject,
         key: *mut PyObject,
-        item: *mut PyObject,
-        hash: crate::Py_hash_t,
-    ) -> c_int;
-    // skipped _PyDict_DelItem_KnownHash
-    // skipped _PyDict_DelItemIf
-    // skipped _PyDict_NewKeysForClass
-    #[cfg(not(PyPy))]
-    pub fn _PyDict_Next(
+        default_obj: *mut PyObject,
+    ) -> *mut PyObject;
+    /*
+    #[cfg(all(Py_3_13, not(Py_3_15)))]
+    pub fn PyDict_SetDefaultRef(
         mp: *mut PyObject,
-        pos: *mut Py_ssize_t,
-        key: *mut *mut PyObject,
-        value: *mut *mut PyObject,
-        hash: *mut crate::Py_hash_t,
-    ) -> c_int;
-    // skipped PyDict_GET_SIZE
-    // skipped _PyDict_ContainsId
-    #[cfg(not(PyPy))]
-    pub fn _PyDict_NewPresized(minused: Py_ssize_t) -> *mut PyObject;
-    // skipped _PyDict_MaybeUntrack
-    // skipped _PyDict_HasOnlyStringKeys
-    // skipped _PyDict_KeysSize
-    // skipped _PyDict_SizeOf
-    // skipped _PyDict_Pop
-    // skipped _PyDict_Pop_KnownHash
-    // skipped _PyDict_FromKeys
-    // skipped _PyDict_HasSplitTable
-    // skipped _PyDict_MergeEx
-    // skipped _PyDict_SetItemId
-    // skipped _PyDict_DelItemId
-    // skipped _PyDict_DebugMallocStats
-    // skipped _PyObjectDict_SetItem
-    // skipped _PyDict_LoadGlobal
-    // skipped _PyDict_GetItemHint
-    // skipped _PyDictViewObject
-    // skipped _PyDictView_New
-    // skipped _PyDictView_Intersect
-
-    #[cfg(Py_3_10)]
-    #[cfg(not(PyPy))]
-    pub fn _PyDict_Contains_KnownHash(
-        op: *mut PyObject,
         key: *mut PyObject,
-        hash: crate::Py_hash_t,
+        default_obj: *mut PyObject,
+        result: *mut *mut PyObject,
     ) -> c_int;
+    */
+}
 
-    #[cfg(not(Py_3_10))]
-    #[cfg(not(PyPy))]
-    pub fn _PyDict_Contains(mp: *mut PyObject, key: *mut PyObject, hash: Py_ssize_t) -> c_int;
+// skipped PyDict_GET_SIZE
+
+extern_libpython! {
+    #[cfg(Py_3_13)]
+    pub fn PyDict_ContainsString(mp: *mut PyObject, key: *const c_char) -> c_int;
+}
+
+// skipped private _PyDict_NewPresized
+
+extern_libpython! {
+    #[cfg(Py_3_13)]
+    pub fn PyDict_Pop(dict: *mut PyObject, key: *mut PyObject, result: *mut *mut PyObject)
+    -> c_int;
+    #[cfg(Py_3_13)]
+    pub fn PyDict_PopString(
+        dict: *mut PyObject,
+        key: *const c_char,
+        result: *mut *mut PyObject,
+    ) -> c_int;
+}
+
+// skipped private _PyDict_Pop
+
+// skipped PY_FOREACH_DICT_EVENT
+// skipped PyDict_WatchEvent
+
+// skipped PyDict_WatchCallback
+
+// skipped PyDict_AddWatcher
+
+extern_libpython! {
+    #[cfg(Py_3_12)]
+    pub fn PyDict_ClearWatcher(watcher_id: c_int) -> c_int;
+    #[cfg(Py_3_12)]
+    #[cfg(not(GraalPy))]
+    pub fn PyDict_Watch(watcher_id: c_int, dict: *mut PyObject) -> c_int;
+    #[cfg(Py_3_12)]
+    #[cfg(not(GraalPy))]
+    pub fn PyDict_Unwatch(watcher_id: c_int, dict: *mut PyObject) -> c_int;
+}
+
+extern_libpython! {
+    #[cfg(Py_3_15)]
+    pub fn PyFrozenDict_New(iterable: *mut PyObject) -> *mut PyObject;
 }

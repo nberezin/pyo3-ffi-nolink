@@ -1,3 +1,4 @@
+#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 //! Raw FFI declarations for Python's C API.
 //!
@@ -34,16 +35,13 @@
 //!
 //! - `abi3`: Restricts PyO3's API to a subset of the full Python API which is guaranteed by
 //! [PEP 384] to be forward-compatible with future Python versions.
-//! - `extension-module`: This will tell the linker to keep the Python symbols unresolved, so that
-//! your module can also be used with statically linked Python interpreters. Use this feature when
-//! building an extension module.
 //!
 //! ## `rustc` environment flags
 //!
 //! PyO3 uses `rustc`'s `--cfg` flags to enable or disable code used for different Python versions.
 //! If you want to do this for your own crate, you can do so with the [`pyo3-build-config`] crate.
 //!
-//! - `Py_3_7`, `Py_3_8`, `Py_3_9`, `Py_3_10`, `Py_3_11`, `Py_3_12`, `Py_3_13`: Marks code that is
+//! - `Py_3_9`, `Py_3_10`, `Py_3_11`, `Py_3_12`, `Py_3_13`, `Py_3_14`, `Py_3_15`: Marks code that is
 //!    only enabled when compiling for a given minimum Python version.
 //! - `Py_LIMITED_API`: Marks code enabled when the `abi3` feature flag is enabled.
 //! - `Py_GIL_DISABLED`: Marks code that runs only in the free-threaded build of CPython.
@@ -80,7 +78,7 @@
 //! # Minimum supported Rust and Python versions
 //!
 //! `pyo3-ffi` supports the following Python distributions:
-//!   - CPython 3.7 or greater
+//!   - CPython 3.9 or greater
 //!   - PyPy 7.3 (Python 3.11+)
 //!   - GraalPy 24.0 or greater (Python 3.10+)
 //!
@@ -105,9 +103,8 @@
 //! # crate-type = ["cdylib", "rlib"]
 //! crate-type = ["cdylib"]
 //!
-//! [dependencies.pyo3-ffi]
-#![doc = concat!("version = \"", env!("CARGO_PKG_VERSION"),  "\"")]
-//! features = ["extension-module"]
+//! [dependencies]
+#![doc = concat!("pyo3-ffi = \"", env!("CARGO_PKG_VERSION"),  "\"")]
 //!
 //! [build-dependencies]
 //! # This is only necessary if you need to configure your build based on
@@ -130,52 +127,90 @@
 //!
 //! **`src/lib.rs`**
 //! ```rust,no_run
-//! use std::ffi::{c_char, c_long};
-//! use std::ptr;
+//! #[cfg(Py_3_15)]
+//! use core::ffi::c_void;
+//! #[cfg(not(Py_3_15))]
+//! use core::ffi::c_int;
+//! use core::ffi::{c_char, c_long};
+//! use core::ptr;
 //!
 //! use pyo3_ffi::*;
 //!
+//! #[cfg(not(Py_3_15))]
 //! static mut MODULE_DEF: PyModuleDef = PyModuleDef {
 //!     m_base: PyModuleDef_HEAD_INIT,
-//!     m_name: c_str!("string_sum").as_ptr(),
-//!     m_doc: c_str!("A Python module written in Rust.").as_ptr(),
+//!     m_name: c"string_sum".as_ptr(),
+//!     m_doc: c"A Python module written in Rust.".as_ptr(),
 //!     m_size: 0,
-//!     m_methods: unsafe { METHODS as *const [PyMethodDef] as *mut PyMethodDef },
-//!     m_slots: std::ptr::null_mut(),
+//!     m_methods: (&raw mut METHODS).cast(),
+//!     m_slots: (&raw mut SLOTS).cast(),
 //!     m_traverse: None,
 //!     m_clear: None,
 //!     m_free: None,
 //! };
 //!
-//! static mut METHODS: &[PyMethodDef] = &[
+//! static mut METHODS: [PyMethodDef; 2] = [
 //!     PyMethodDef {
-//!         ml_name: c_str!("sum_as_string").as_ptr(),
+//!         ml_name: c"sum_as_string".as_ptr(),
 //!         ml_meth: PyMethodDefPointer {
 //!             PyCFunctionFast: sum_as_string,
 //!         },
 //!         ml_flags: METH_FASTCALL,
-//!         ml_doc: c_str!("returns the sum of two integers as a string").as_ptr(),
+//!         ml_doc: c"returns the sum of two integers as a string".as_ptr(),
 //!     },
 //!     // A zeroed PyMethodDef to mark the end of the array.
 //!     PyMethodDef::zeroed(),
 //! ];
 //!
-//! // The module initialization function, which must be named `PyInit_<your_module>`.
-//! #[allow(non_snake_case)]
-//! #[no_mangle]
-//! pub unsafe extern "C" fn PyInit_string_sum() -> *mut PyObject {
-//!     let module = PyModule_Create(ptr::addr_of_mut!(MODULE_DEF));
-//!     if module.is_null() {
-//!         return module;
-//!     }
+//! const SLOTS_LEN: usize =
+//!     1 + cfg!(Py_3_12) as usize + cfg!(Py_GIL_DISABLED) as usize + 4 * (cfg!(Py_3_15) as usize);
+//!
+//! #[cfg(not(Py_3_15))]
+//! static mut SLOTS: [PyModuleDef_Slot; SLOTS_LEN] = [
+//!     #[cfg(Py_3_12)]
+//!     PyModuleDef_Slot {
+//!         slot: Py_mod_multiple_interpreters,
+//!         value: Py_MOD_PER_INTERPRETER_GIL_SUPPORTED,
+//!     },
 //!     #[cfg(Py_GIL_DISABLED)]
-//!     {
-//!         if PyUnstable_Module_SetGIL(module, Py_MOD_GIL_NOT_USED) < 0 {
-//!             Py_DECREF(module);
-//!             return std::ptr::null_mut();
-//!         }
-//!     }
-//!     module
+//!     PyModuleDef_Slot {
+//!         slot: Py_mod_gil,
+//!         value: Py_MOD_GIL_NOT_USED,
+//!     },
+//!     PyModuleDef_Slot {
+//!         slot: 0,
+//!         value: ptr::null_mut(),
+//!     },
+//! ];
+//!
+//! #[cfg(Py_3_15)]
+//! PyABIInfo_VAR!(ABI_INFO);
+//!
+//! #[cfg(Py_3_15)]
+//! static mut SLOTS: [PySlot; SLOTS_LEN] = [
+//!     PySlot_STATIC_DATA(Py_mod_abi, core::ptr::addr_of_mut!(ABI_INFO).cast()),
+//!     PySlot_STATIC_DATA(Py_mod_name, c"string_sum".as_ptr() as *mut c_void),
+//!     PySlot_STATIC_DATA(Py_mod_doc, c"A Python module written in Rust.".as_ptr() as *mut c_void),
+//!     PySlot_STATIC_DATA(Py_mod_methods, (&raw mut METHODS).cast()),
+//!     PySlot_DATA(Py_mod_multiple_interpreters, Py_MOD_PER_INTERPRETER_GIL_SUPPORTED),
+//!     #[cfg(Py_GIL_DISABLED)]
+//!     PySlot_DATA(Py_mod_gil, Py_MOD_GIL_NOT_USED),
+//!     PySlot_END(),
+//! ];
+//!
+//! // The module initialization function
+//! #[cfg(not(Py_3_15))]
+//! #[allow(non_snake_case, reason = "must be named `PyInit_<your_module>`")]
+//! #[unsafe(no_mangle)]
+//! pub unsafe extern "C" fn PyInit_string_sum() -> *mut PyObject {
+//!     PyModuleDef_Init(&raw mut MODULE_DEF)
+//! }
+//!
+//! #[cfg(Py_3_15)]
+//! #[allow(non_snake_case, reason = "must be named `PyModExport_<your_module>`")]
+//! #[unsafe(no_mangle)]
+//! pub unsafe extern "C" fn PyModExport_string_sum() -> *mut PySlot {
+//!     (&raw mut SLOTS).cast()
 //! }
 //!
 //! /// A helper to parse function arguments
@@ -195,7 +230,10 @@
 //!     let mut overflow = 0;
 //!     let i_long: c_long = PyLong_AsLongAndOverflow(obj, &mut overflow);
 //!
-//!     #[allow(irrefutable_let_patterns)] // some platforms have c_long equal to i32
+//!     #[allow(
+//!         irrefutable_let_patterns,
+//!         reason = "some platforms have c_long equal to i32"
+//!     )]
 //!     if overflow != 0 {
 //!         raise_overflowerror(obj);
 //!         None
@@ -213,7 +251,7 @@
 //!         let mut size = 0;
 //!         let p = PyUnicode_AsUTF8AndSize(obj_repr, &mut size);
 //!         if !p.is_null() {
-//!             let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+//!             let s = core::str::from_utf8_unchecked(core::slice::from_raw_parts(
 //!                 p.cast::<u8>(),
 //!                 size as usize,
 //!             ));
@@ -233,20 +271,20 @@
 //!     if nargs != 2 {
 //!         PyErr_SetString(
 //!             PyExc_TypeError,
-//!             c_str!("sum_as_string expected 2 positional arguments").as_ptr(),
+//!             c"sum_as_string expected 2 positional arguments".as_ptr(),
 //!         );
-//!         return std::ptr::null_mut();
+//!         return core::ptr::null_mut();
 //!     }
 //!
 //!     let (first, second) = (*args, *args.add(1));
 //!
 //!     let first = match parse_arg_as_i32(first, 1) {
 //!         Some(x) => x,
-//!         None => return std::ptr::null_mut(),
+//!         None => return core::ptr::null_mut(),
 //!     };
 //!     let second = match parse_arg_as_i32(second, 2) {
 //!         Some(x) => x,
-//!         None => return std::ptr::null_mut(),
+//!         None => return core::ptr::null_mut(),
 //!     };
 //!
 //!     match first.checked_add(second) {
@@ -255,11 +293,8 @@
 //!             PyUnicode_FromStringAndSize(string.as_ptr().cast::<c_char>(), string.len() as isize)
 //!         }
 //!         None => {
-//!             PyErr_SetString(
-//!                 PyExc_OverflowError,
-//!                 c_str!("arguments too large to add").as_ptr(),
-//!             );
-//!             std::ptr::null_mut()
+//!             PyErr_SetString(PyExc_OverflowError, c"arguments too large to add".as_ptr());
+//!             core::ptr::null_mut()
 //!         }
 //!     }
 //! }
@@ -320,7 +355,7 @@
 #![doc = concat!("[manual_builds]: https://pyo3.rs/v", env!("CARGO_PKG_VERSION"), "/building-and-distribution.html#manual-builds \"Manual builds - Building and Distribution - PyO3 user guide\"")]
 //! [setuptools-rust]: https://github.com/PyO3/setuptools-rust "Setuptools plugin for Rust extensions"
 //! [PEP 384]: https://www.python.org/dev/peps/pep-0384 "PEP 384 -- Defining a Stable ABI"
-#![doc = concat!("[Features chapter of the guide]: https://pyo3.rs/v", env!("CARGO_PKG_VERSION"), "/features.html#features-reference \"Features eference - PyO3 user guide\"")]
+#![doc = concat!("[Features chapter of the guide]: https://pyo3.rs/v", env!("CARGO_PKG_VERSION"), "/features.html#features-reference \"Features reference - PyO3 user guide\"")]
 #![allow(
     missing_docs,
     non_camel_case_types,
@@ -330,12 +365,22 @@
     clippy::missing_safety_doc,
     clippy::ptr_eq
 )]
+#![warn(
+    clippy::alloc_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::std_instead_of_core
+)]
 #![warn(elided_lifetimes_in_paths, unused_lifetimes)]
 // This crate is a hand-maintained translation of CPython's headers, so requiring "unsafe"
 // blocks within those translations increases maintenance burden without providing any
 // additional safety. The safety of the functions in this crate is determined by the
 // original CPython headers
 #![allow(unsafe_op_in_unsafe_fn)]
+
+#[cfg(not(PyPy))]
+extern crate alloc;
+#[cfg(not(any(Py_3_14, target_arch = "wasm32")))]
+extern crate std;
 
 // Until `extern type` is stabilized, use the recommended approach to
 // model opaque types:
@@ -344,7 +389,10 @@ macro_rules! opaque_struct {
     ($(#[$attrs:meta])* $pub:vis $name:ident) => {
         $(#[$attrs])*
         #[repr(C)]
-        $pub struct $name([u8; 0]);
+        $pub struct $name {
+            _data: (),
+            _marker: core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
+        }
     };
 }
 
@@ -359,13 +407,14 @@ macro_rules! opaque_struct {
 /// Examples:
 ///
 /// ```rust,no_run
-/// use std::ffi::CStr;
+/// use core::ffi::CStr;
 ///
 /// const HELLO: &CStr = pyo3_ffi::c_str!("hello");
 /// static WORLD: &CStr = pyo3_ffi::c_str!("world");
 /// ```
 #[macro_export]
 macro_rules! c_str {
+    // TODO: deprecate this now MSRV is above 1.77
     ($s:expr) => {
         $crate::_cstr_from_utf8_with_nul_checked(concat!($s, "\0"))
     };
@@ -373,46 +422,48 @@ macro_rules! c_str {
 
 /// Private helper for `c_str!` macro.
 #[doc(hidden)]
-pub const fn _cstr_from_utf8_with_nul_checked(s: &str) -> &std::ffi::CStr {
-    match std::ffi::CStr::from_bytes_with_nul(s.as_bytes()) {
+pub const fn _cstr_from_utf8_with_nul_checked(s: &str) -> &core::ffi::CStr {
+    match core::ffi::CStr::from_bytes_with_nul(s.as_bytes()) {
         Ok(cstr) => cstr,
         Err(_) => panic!("string contains nul bytes"),
     }
 }
 
+// Macros for declaring `extern` blocks that link against libpython.
+#[path = "impl_/macros.rs"]
+#[macro_use]
+mod macros;
+
 pub mod compat;
 mod impl_;
 
 pub use self::abstract_::*;
+#[cfg(not(RustPython))]
 pub use self::bltinmodule::*;
 pub use self::boolobject::*;
 pub use self::bytearrayobject::*;
 pub use self::bytesobject::*;
 pub use self::ceval::*;
-#[cfg(Py_LIMITED_API)]
-pub use self::code::*;
 pub use self::codecs::*;
 pub use self::compile::*;
 pub use self::complexobject::*;
-#[cfg(all(Py_3_8, not(Py_LIMITED_API)))]
-pub use self::context::*;
+#[cfg(Py_3_13)]
+pub use self::critical_section::*;
 #[cfg(not(Py_LIMITED_API))]
 pub use self::datetime::*;
 pub use self::descrobject::*;
 pub use self::dictobject::*;
+#[cfg(not(RustPython))]
 pub use self::enumobject::*;
 pub use self::fileobject::*;
 pub use self::fileutils::*;
 pub use self::floatobject::*;
-#[cfg(Py_3_9)]
 pub use self::genericaliasobject::*;
 pub use self::import::*;
 pub use self::intrcheck::*;
 pub use self::iterobject::*;
 pub use self::listobject::*;
 pub use self::longobject::*;
-#[cfg(not(Py_LIMITED_API))]
-pub use self::marshal::*;
 pub use self::memoryobject::*;
 pub use self::methodobject::*;
 pub use self::modsupport::*;
@@ -434,16 +485,19 @@ pub use self::pyport::*;
 pub use self::pystate::*;
 pub use self::pystrtod::*;
 pub use self::pythonrun::*;
+pub use self::pythread::*;
 pub use self::pytypedefs::*;
 pub use self::rangeobject::*;
 pub use self::refcount::*;
 pub use self::setobject::*;
 pub use self::sliceobject::*;
+#[cfg(Py_3_15)]
+pub use self::slots::*;
+pub use self::slots_generated::*;
 pub use self::structseq::*;
 pub use self::sysmodule::*;
 pub use self::traceback::*;
 pub use self::tupleobject::*;
-pub use self::typeslots::*;
 pub use self::unicodeobject::*;
 pub use self::warnings::*;
 pub use self::weakrefobject::*;
@@ -451,6 +505,7 @@ pub use self::weakrefobject::*;
 mod abstract_;
 // skipped asdl.h
 // skipped ast.h
+#[cfg(not(RustPython))]
 mod bltinmodule;
 mod boolobject;
 mod bytearrayobject;
@@ -458,18 +513,16 @@ mod bytesobject;
 // skipped cellobject.h
 mod ceval;
 // skipped classobject.h
-#[cfg(Py_LIMITED_API)]
-mod code;
 mod codecs;
 mod compile;
 mod complexobject;
-#[cfg(all(Py_3_8, not(Py_LIMITED_API)))]
-mod context; // It's actually 3.7.1, but no cfg for patches.
+mod critical_section;
 #[cfg(not(Py_LIMITED_API))]
 pub(crate) mod datetime;
 mod descrobject;
 mod dictobject;
 // skipped dynamic_annotations.h
+#[cfg(not(RustPython))]
 mod enumobject;
 // skipped errcode.h
 // skipped exports.h
@@ -483,10 +536,7 @@ mod import;
 mod intrcheck;
 mod iterobject;
 mod listobject;
-// skipped longintrepr.h
 mod longobject;
-#[cfg(not(Py_LIMITED_API))]
-pub mod marshal;
 mod memoryobject;
 mod methodobject;
 mod modsupport;
@@ -526,19 +576,20 @@ mod pythonrun;
 // skipped pystrhex.h
 // skipped pystrcmp.h
 mod pystrtod;
-// skipped pythread.h
+mod pythread;
 // skipped pytime.h
 mod pytypedefs;
 mod rangeobject;
 mod refcount;
 mod setobject;
 mod sliceobject;
+mod slots;
+mod slots_generated;
 mod structseq;
 mod sysmodule;
 mod traceback;
 // skipped tracemalloc.h
 mod tupleobject;
-mod typeslots;
 mod unicodeobject;
 mod warnings;
 mod weakrefobject;
@@ -548,8 +599,8 @@ mod weakrefobject;
 pub mod structmember;
 
 // "Limited API" definitions matching Python's `include/cpython` directory.
-#[cfg(not(Py_LIMITED_API))]
+#[cfg(not(any(Py_LIMITED_API, RustPython)))]
 mod cpython;
 
-#[cfg(not(Py_LIMITED_API))]
+#[cfg(not(any(Py_LIMITED_API, RustPython)))]
 pub use self::cpython::*;

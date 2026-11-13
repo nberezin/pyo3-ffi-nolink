@@ -1,17 +1,17 @@
+use core::ffi::{c_int, c_void};
 use libc::size_t;
-use std::ffi::{c_int, c_void};
 
 use crate::object::*;
 use crate::pyport::Py_ssize_t;
 
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Malloc")]
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Malloc")]
     pub fn PyObject_Malloc(size: size_t) -> *mut c_void;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Calloc")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Calloc")]
     pub fn PyObject_Calloc(nelem: size_t, elsize: size_t) -> *mut c_void;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Realloc")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Realloc")]
     pub fn PyObject_Realloc(ptr: *mut c_void, new_size: size_t) -> *mut c_void;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Free")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Free")]
     pub fn PyObject_Free(ptr: *mut c_void);
 
     // skipped PyObject_MALLOC
@@ -20,9 +20,9 @@ extern "C" {
     // skipped PyObject_Del
     // skipped PyObject_DEL
 
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Init")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Init")]
     pub fn PyObject_Init(arg1: *mut PyObject, arg2: *mut PyTypeObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_InitVar")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_InitVar")]
     pub fn PyObject_InitVar(
         arg1: *mut PyVarObject,
         arg2: *mut PyTypeObject,
@@ -32,31 +32,48 @@ extern "C" {
     // skipped PyObject_INIT
     // skipped PyObject_INIT_VAR
 
-    #[cfg_attr(PyPy, link_name = "_PyPyObject_New")]
-    pub fn _PyObject_New(arg1: *mut PyTypeObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "_PyPyObject_NewVar")]
-    pub fn _PyObject_NewVar(arg1: *mut PyTypeObject, arg2: Py_ssize_t) -> *mut PyVarObject;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPyObject_New")]
+    fn _PyObject_New(typeobj: *mut PyTypeObject) -> *mut PyObject;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPyObject_NewVar")]
+    fn _PyObject_NewVar(typeobj: *mut PyTypeObject, n: Py_ssize_t) -> *mut PyVarObject;
+}
 
-    // skipped PyObject_New
-    // skipped PyObject_NEW
-    // skipped PyObject_NewVar
-    // skipped PyObject_NEW_VAR
+#[inline]
+pub unsafe fn PyObject_New<T>(typeobj: *mut PyTypeObject) -> *mut T {
+    _PyObject_New(typeobj).cast()
+}
 
-    pub fn PyGC_Collect() -> Py_ssize_t;
+// skipped PyObject_NEW
+
+#[inline]
+pub unsafe fn PyObject_NewVar<T>(typeobj: *mut PyTypeObject, n: Py_ssize_t) -> *mut T {
+    _PyObject_NewVar(typeobj, n).cast()
+}
+
+// skipped PyObject_NEW_VAR
+
+#[cfg(not(all(PyPy, not(Py_3_12))))]
+type PyGCCollectReturn = Py_ssize_t;
+
+// PyPy before 3.12 seems to use `int` for return type
+#[cfg(all(PyPy, not(Py_3_12)))]
+type PyGCCollectReturn = c_int;
+
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyGC_Collect")]
+    pub fn PyGC_Collect() -> PyGCCollectReturn;
 
     #[cfg(Py_3_10)]
-    #[cfg_attr(PyPy, link_name = "PyPyGC_Enable")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyGC_Enable")]
     pub fn PyGC_Enable() -> c_int;
 
     #[cfg(Py_3_10)]
-    #[cfg_attr(PyPy, link_name = "PyPyGC_Disable")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyGC_Disable")]
     pub fn PyGC_Disable() -> c_int;
 
     #[cfg(Py_3_10)]
-    #[cfg_attr(PyPy, link_name = "PyPyGC_IsEnabled")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyGC_IsEnabled")]
     pub fn PyGC_IsEnabled() -> c_int;
-
-    // skipped PyUnstable_GC_VisitObjects
 }
 
 #[inline]
@@ -64,30 +81,60 @@ pub unsafe fn PyType_IS_GC(t: *mut PyTypeObject) -> c_int {
     PyType_HasFeature(t, Py_TPFLAGS_HAVE_GC)
 }
 
-extern "C" {
-    pub fn _PyObject_GC_Resize(arg1: *mut PyVarObject, arg2: Py_ssize_t) -> *mut PyVarObject;
+extern_libpython! {
+    fn _PyObject_GC_Resize(op: *mut PyVarObject, n: Py_ssize_t) -> *mut PyVarObject;
+}
 
-    // skipped PyObject_GC_Resize
+#[inline]
+pub unsafe fn PyObject_GC_Resize<T>(op: *mut PyObject, n: Py_ssize_t) -> *mut T {
+    _PyObject_GC_Resize(op.cast(), n).cast()
+}
 
-    #[cfg_attr(PyPy, link_name = "_PyPyObject_GC_New")]
-    pub fn _PyObject_GC_New(arg1: *mut PyTypeObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "_PyPyObject_GC_NewVar")]
-    pub fn _PyObject_GC_NewVar(arg1: *mut PyTypeObject, arg2: Py_ssize_t) -> *mut PyVarObject;
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPyObject_GC_New")]
+    fn _PyObject_GC_New(typeobj: *mut PyTypeObject) -> *mut PyObject;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPyObject_GC_NewVar")]
+    fn _PyObject_GC_NewVar(typeobj: *mut PyTypeObject, n: Py_ssize_t) -> *mut PyVarObject;
+
     #[cfg(not(PyPy))]
     pub fn PyObject_GC_Track(arg1: *mut c_void);
+
     #[cfg(not(PyPy))]
     pub fn PyObject_GC_UnTrack(arg1: *mut c_void);
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GC_Del")]
+}
+
+// PyPy currently implements the following two as no-op macros
+// https://github.com/pypy/pypy/blob/194f9f44b50552d75484d67cda6e2b36607dee0c/pypy/module/cpyext/include/objimpl.h#L178-L190
+
+#[cfg(PyPy)]
+#[inline(always)]
+pub unsafe fn PyObject_GC_Track(_: *mut c_void) {}
+
+#[cfg(PyPy)]
+#[inline(always)]
+pub unsafe fn PyObject_GC_UnTrack(_: *mut c_void) {}
+
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GC_Del")]
     pub fn PyObject_GC_Del(arg1: *mut c_void);
+}
 
-    // skipped PyObject_GC_New
-    // skipped PyObject_GC_NewVar
+#[inline]
+pub unsafe fn PyObject_GC_New<T>(typeobj: *mut PyTypeObject) -> *mut T {
+    _PyObject_GC_New(typeobj).cast()
+}
 
-    #[cfg(any(all(Py_3_9, not(PyPy)), Py_3_10))] // added in 3.9, or 3.10 on PyPy
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GC_IsTracked")]
+#[inline]
+pub unsafe fn PyObject_GC_NewVar<T>(typeobj: *mut PyTypeObject, n: Py_ssize_t) -> *mut T {
+    _PyObject_GC_NewVar(typeobj, n).cast()
+}
+
+extern_libpython! {
+    #[cfg(any(not(PyPy), Py_3_10))] // added in 3.9, or 3.10 on PyPy
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GC_IsTracked")]
     pub fn PyObject_GC_IsTracked(arg1: *mut PyObject) -> c_int;
-    #[cfg(any(all(Py_3_9, not(PyPy)), Py_3_10))] // added in 3.9, or 3.10 on PyPy
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GC_IsFinalized")]
+    #[cfg(any(not(PyPy), Py_3_10))] // added in 3.9, or 3.10 on PyPy
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GC_IsFinalized")]
     pub fn PyObject_GC_IsFinalized(arg1: *mut PyObject) -> c_int;
 }
 

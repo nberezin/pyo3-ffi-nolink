@@ -1,12 +1,11 @@
-#[cfg(not(PyPy))]
 use crate::PyThreadState;
+#[cfg(all(Py_3_11, not(PyPy)))]
+use crate::cpython::pyframe::_PyInterpreterFrame;
 use crate::{PyFrameObject, PyInterpreterState, PyObject};
-use std::ffi::c_int;
+use core::ffi::c_int;
 
-// skipped _PyInterpreterState_RequiresIDRef
-// skipped _PyInterpreterState_RequireIDRef
-
-// skipped _PyInterpreterState_GetMainModule
+// skipped private _PyInterpreterState_RequiresIDRef
+// skipped private _PyInterpreterState_RequireIDRef
 
 pub type Py_tracefunc = unsafe extern "C" fn(
     obj: *mut PyObject,
@@ -14,6 +13,20 @@ pub type Py_tracefunc = unsafe extern "C" fn(
     what: c_int,
     arg: *mut PyObject,
 ) -> c_int;
+
+#[cfg(all(not(Py_3_11), not(PyPy)))]
+pub type _PyFrameEvalFunction = unsafe extern "C" fn(
+    tstate: *mut PyThreadState,
+    frame: *mut PyFrameObject,
+    throwflag: c_int,
+) -> *mut PyObject;
+
+#[cfg(all(Py_3_11, not(PyPy)))]
+pub type _PyFrameEvalFunction = unsafe extern "C" fn(
+    tstate: *mut PyThreadState,
+    frame: *mut _PyInterpreterFrame,
+    throwflag: c_int,
+) -> *mut PyObject;
 
 pub const PyTrace_CALL: c_int = 0;
 pub const PyTrace_EXCEPTION: c_int = 1;
@@ -24,11 +37,14 @@ pub const PyTrace_C_EXCEPTION: c_int = 5;
 pub const PyTrace_C_RETURN: c_int = 6;
 pub const PyTrace_OPCODE: c_int = 7;
 
-// skipped PyTraceInfo
-// skipped CFrame
+// skipped private _Py_MAX_SCRIPT_PATH_SIZE
+// skipped private _PyRemoteDebuggerSupport
 
 /// Private structure used inline in `PyGenObject`
-#[cfg(not(PyPy))]
+///
+/// `PyGenObject` was made opaque in Python 3.14, so we don't bother defining this
+/// structure for that version and later.
+#[cfg(not(any(PyPy, Py_3_14)))]
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct _PyErr_StackItem {
@@ -40,20 +56,33 @@ pub(crate) struct _PyErr_StackItem {
     previous_item: *mut _PyErr_StackItem,
 }
 
-// skipped _PyStackChunk
-// skipped _ts (aka PyThreadState)
+// skipped private _PyStackChunk
 
-extern "C" {
-    // skipped _PyThreadState_Prealloc
-    // skipped _PyThreadState_UncheckedGet
-    // skipped _PyThreadState_GetDict
+// skipped private _PY_DATA_STACK_CHUNK_SIZE
+// skipped private _ts (aka PyThreadState)
+
+extern_libpython! {
+    #[cfg(Py_3_13)]
+    pub fn PyThreadState_GetUnchecked() -> *mut PyThreadState;
+
+    #[cfg(not(Py_3_13))]
+    #[cfg_attr(PyPy, link_name = "_PyPyThreadState_UncheckedGet")]
+    pub(crate) fn _PyThreadState_UncheckedGet() -> *mut PyThreadState;
+
+    #[cfg(Py_3_11)]
+    #[cfg_attr(PyPy, link_name = "PyPyThreadState_EnterTracing")]
+    pub fn PyThreadState_EnterTracing(state: *mut PyThreadState);
+    #[cfg(Py_3_11)]
+    #[cfg_attr(PyPy, link_name = "PyPyThreadState_LeaveTracing")]
+    pub fn PyThreadState_LeaveTracing(state: *mut PyThreadState);
 
     #[cfg_attr(PyPy, link_name = "PyPyGILState_Check")]
     pub fn PyGILState_Check() -> c_int;
 
-    // skipped _PyGILState_GetInterpreterStateUnsafe
-    // skipped _PyThread_CurrentFrames
-    // skipped _PyThread_CurrentExceptions
+    // skipped private _PyThread_CurrentFrames
+
+    // skipped PyUnstable_ThreadState_SetStackProtection
+    // skipped PyUnstable_ThreadState_ResetStackProtection
 
     #[cfg(not(PyPy))]
     pub fn PyInterpreterState_Main() -> *mut PyInterpreterState;
@@ -66,48 +95,20 @@ extern "C" {
     #[cfg(not(PyPy))]
     pub fn PyThreadState_Next(tstate: *mut PyThreadState) -> *mut PyThreadState;
 
-    #[cfg_attr(PyPy, link_name = "PyPyThreadState_DeleteCurrent")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyThreadState_DeleteCurrent")]
     pub fn PyThreadState_DeleteCurrent();
-}
 
-#[cfg(all(Py_3_9, not(any(Py_3_11, PyPy))))]
-pub type _PyFrameEvalFunction = extern "C" fn(
-    *mut crate::PyThreadState,
-    *mut crate::PyFrameObject,
-    c_int,
-) -> *mut crate::object::PyObject;
-
-#[cfg(all(Py_3_11, not(PyPy)))]
-pub type _PyFrameEvalFunction = extern "C" fn(
-    *mut crate::PyThreadState,
-    *mut crate::_PyInterpreterFrame,
-    c_int,
-) -> *mut crate::object::PyObject;
-
-#[cfg(all(Py_3_9, not(PyPy)))]
-extern "C" {
-    /// Get the frame evaluation function.
+    #[cfg(all(not(Py_3_11), not(PyPy)))]
+    pub fn _PyInterpreterState_GetEvalFrameFunc(
+        interp: *mut PyInterpreterState,
+    ) -> Option<_PyFrameEvalFunction>;
+    #[cfg(all(Py_3_11, not(PyPy)))]
     pub fn _PyInterpreterState_GetEvalFrameFunc(
         interp: *mut PyInterpreterState,
     ) -> _PyFrameEvalFunction;
-
-    ///Set the frame evaluation function.
+    #[cfg(not(PyPy))]
     pub fn _PyInterpreterState_SetEvalFrameFunc(
         interp: *mut PyInterpreterState,
-        eval_frame: _PyFrameEvalFunction,
+        eval_frame: Option<_PyFrameEvalFunction>,
     );
 }
-
-// skipped _PyInterpreterState_GetConfig
-// skipped _PyInterpreterState_GetConfigCopy
-// skipped _PyInterpreterState_SetConfig
-// skipped _Py_GetConfig
-
-// skipped _PyCrossInterpreterData
-// skipped _PyObject_GetCrossInterpreterData
-// skipped _PyCrossInterpreterData_NewObject
-// skipped _PyCrossInterpreterData_Release
-// skipped _PyObject_CheckCrossInterpreterData
-// skipped crossinterpdatafunc
-// skipped _PyCrossInterpreterData_RegisterClass
-// skipped _PyCrossInterpreterData_Lookup

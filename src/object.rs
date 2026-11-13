@@ -1,16 +1,19 @@
 use crate::pyport::{Py_hash_t, Py_ssize_t};
-#[cfg(Py_GIL_DISABLED)]
-use crate::refcount;
-#[cfg(Py_GIL_DISABLED)]
-use crate::PyMutex;
-use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
-use std::mem;
-use std::ptr;
-#[cfg(Py_GIL_DISABLED)]
-use std::sync::atomic::{AtomicIsize, AtomicU32};
-
+// these re-exports are pub because it would be awkward to
+// thread the different origins for these types on this build
+// everywhere else
+#[cfg(Py_3_15)]
+use crate::PySlot;
 #[cfg(Py_LIMITED_API)]
-opaque_struct!(pub PyTypeObject);
+pub use crate::pytypedefs::PyTypeObject;
+#[cfg(all(Py_LIMITED_API, Py_GIL_DISABLED))]
+pub use crate::pytypedefs::{PyObject, PyVarObject};
+#[cfg(all(Py_GIL_DISABLED, not(Py_LIMITED_API)))]
+use crate::{PyMutex, refcount};
+use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use core::mem;
+#[cfg(all(Py_GIL_DISABLED, not(Py_LIMITED_API)))]
+use core::sync::atomic::{AtomicIsize, AtomicU32};
 
 #[cfg(not(Py_LIMITED_API))]
 pub use crate::cpython::object::PyTypeObject;
@@ -49,9 +52,16 @@ pub struct PyObjectObFlagsAndRefcnt {
     pub ob_flags: u16,
 }
 
+// 4-byte alignment comes from value of _PyObject_MIN_ALIGNMENT
+
+#[cfg(all(not(Py_GIL_DISABLED), Py_3_15))]
+#[repr(C, align(4))]
+#[derive(Copy, Clone)]
+struct Aligner(c_char);
+
 #[repr(C)]
 #[derive(Copy, Clone)]
-#[cfg(all(Py_3_12, not(Py_GIL_DISABLED)))]
+#[cfg(all(all(Py_3_12, not(PyPy)), not(Py_GIL_DISABLED)))]
 /// This union is anonymous in CPython, so the name was given by PyO3 because
 /// Rust union need a name.
 pub union PyObjectObRefcnt {
@@ -62,28 +72,35 @@ pub union PyObjectObRefcnt {
     pub ob_refcnt: Py_ssize_t,
     #[cfg(all(target_pointer_width = "64", not(Py_3_14)))]
     pub ob_refcnt_split: [crate::PY_UINT32_T; 2],
+    #[cfg(all(not(Py_GIL_DISABLED), Py_3_15))]
+    _aligner: Aligner,
 }
 
-#[cfg(all(Py_3_12, not(Py_GIL_DISABLED)))]
-impl std::fmt::Debug for PyObjectObRefcnt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+#[cfg(all(all(Py_3_12, not(PyPy)), not(Py_GIL_DISABLED)))]
+impl core::fmt::Debug for PyObjectObRefcnt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // SAFETY: always valid to print `ob_refcnt` as a number
         write!(f, "{}", unsafe { self.ob_refcnt })
     }
 }
 
-#[cfg(all(not(Py_3_12), not(Py_GIL_DISABLED)))]
+#[cfg(all(not(all(Py_3_12, not(PyPy))), not(Py_GIL_DISABLED)))]
 pub type PyObjectObRefcnt = Py_ssize_t;
+
+const _PyObject_MIN_ALIGNMENT: usize = 4;
 
 // PyObject_HEAD_INIT comes before the PyObject definition in object.h
 // but we put it after PyObject because HEAD_INIT uses PyObject
 
-#[repr(C)]
+// repr(align(4)) corresponds to the use of _Py_ALIGNED_DEF in object.h. It is
+// not currently possible to use constant variables with repr(align()), see
+// https://github.com/rust-lang/rust/issues/52840
+
+#[cfg(not(all(Py_LIMITED_API, Py_GIL_DISABLED)))]
+#[cfg_attr(not(all(Py_3_15, Py_GIL_DISABLED)), repr(C))]
+#[cfg_attr(all(Py_3_15, Py_GIL_DISABLED), repr(C, align(4)))]
 #[derive(Debug)]
 pub struct PyObject {
-    #[cfg(py_sys_config = "Py_TRACE_REFS")]
-    pub _ob_next: *mut PyObject,
-    #[cfg(py_sys_config = "Py_TRACE_REFS")]
-    pub _ob_prev: *mut PyObject,
     #[cfg(Py_GIL_DISABLED)]
     pub ob_tid: libc::uintptr_t,
     #[cfg(all(Py_GIL_DISABLED, not(Py_3_14)))]
@@ -100,20 +117,25 @@ pub struct PyObject {
     pub ob_ref_shared: AtomicIsize, // shared reference count
     #[cfg(not(Py_GIL_DISABLED))]
     pub ob_refcnt: PyObjectObRefcnt,
-    #[cfg(PyPy)]
+    #[cfg(all(PyPy, not(Py_3_12)))]
     pub ob_pypy_link: Py_ssize_t,
     pub ob_type: *mut PyTypeObject,
 }
 
-#[allow(clippy::declare_interior_mutable_const)]
+#[cfg(not(all(Py_LIMITED_API, Py_GIL_DISABLED)))]
+const _: () = assert!(core::mem::align_of::<PyObject>() >= _PyObject_MIN_ALIGNMENT);
+
+#[cfg(not(all(Py_LIMITED_API, Py_GIL_DISABLED)))]
+#[allow(
+    clippy::declare_interior_mutable_const,
+    reason = "contains atomic refcount on free-threaded builds"
+)]
 pub const PyObject_HEAD_INIT: PyObject = PyObject {
-    #[cfg(py_sys_config = "Py_TRACE_REFS")]
-    _ob_next: std::ptr::null_mut(),
-    #[cfg(py_sys_config = "Py_TRACE_REFS")]
-    _ob_prev: std::ptr::null_mut(),
     #[cfg(Py_GIL_DISABLED)]
     ob_tid: 0,
-    #[cfg(all(Py_GIL_DISABLED, Py_3_14))]
+    #[cfg(all(Py_GIL_DISABLED, Py_3_15))]
+    ob_flags: refcount::_Py_STATICALLY_ALLOCATED_FLAG as u16,
+    #[cfg(all(Py_GIL_DISABLED, all(Py_3_14, not(Py_3_15))))]
     ob_flags: 0,
     #[cfg(all(Py_GIL_DISABLED, not(Py_3_14)))]
     _padding: 0,
@@ -125,19 +147,20 @@ pub const PyObject_HEAD_INIT: PyObject = PyObject {
     ob_ref_local: AtomicU32::new(refcount::_Py_IMMORTAL_REFCNT_LOCAL),
     #[cfg(Py_GIL_DISABLED)]
     ob_ref_shared: AtomicIsize::new(0),
-    #[cfg(all(not(Py_GIL_DISABLED), Py_3_12))]
+    #[cfg(all(not(Py_GIL_DISABLED), not(PyPy), Py_3_12))]
     ob_refcnt: PyObjectObRefcnt { ob_refcnt: 1 },
-    #[cfg(not(Py_3_12))]
+    #[cfg(any(not(Py_3_12), PyPy))]
     ob_refcnt: 1,
-    #[cfg(PyPy)]
+    #[cfg(all(PyPy, not(Py_3_12)))]
     ob_pypy_link: 0,
-    ob_type: std::ptr::null_mut(),
+    ob_type: core::ptr::null_mut(),
 };
 
 // skipped _Py_UNOWNED_TID
 
 // skipped _PyObject_CAST
 
+#[cfg(not(all(Py_LIMITED_API, Py_GIL_DISABLED)))]
 #[repr(C)]
 #[derive(Debug)]
 pub struct PyVarObject {
@@ -146,22 +169,25 @@ pub struct PyVarObject {
     pub ob_size: Py_ssize_t,
     // On GraalPy the field is physically there, but not always populated. We hide it to prevent accidental misuse
     #[cfg(GraalPy)]
-    pub _ob_size_graalpy: Py_ssize_t,
+    _ob_size_graalpy: Py_ssize_t,
 }
 
-// skipped private _PyVarObject_CAST
+#[inline]
+pub(crate) unsafe fn _PyVarObject_CAST(op: *mut PyObject) -> *mut PyVarObject {
+    op.cast()
+}
 
 #[inline]
-#[cfg(not(any(GraalPy, PyPy)))]
+#[cfg(not(any(GraalPy, PyPy, RustPython)))]
 #[cfg_attr(docsrs, doc(cfg(all())))]
 pub unsafe fn Py_Is(x: *mut PyObject, y: *mut PyObject) -> c_int {
     (x == y).into()
 }
 
-#[cfg(any(GraalPy, PyPy))]
+#[cfg(any(GraalPy, PyPy, RustPython))]
 #[cfg_attr(docsrs, doc(cfg(all())))]
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPy_Is")]
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPy_Is")]
     pub fn Py_Is(x: *mut PyObject, y: *mut PyObject) -> c_int;
 }
 
@@ -172,7 +198,7 @@ extern "C" {
 // skipped _Py_IsOwnedByCurrentThread
 
 #[cfg(GraalPy)]
-extern "C" {
+extern_libpython! {
     #[cfg(GraalPy)]
     fn _Py_TYPE(arg1: *const PyObject) -> *mut PyTypeObject;
 
@@ -181,7 +207,7 @@ extern "C" {
 }
 
 #[inline]
-#[cfg(not(Py_3_14))]
+#[cfg(not(all(Py_LIMITED_API, Py_3_14)))]
 pub unsafe fn Py_TYPE(ob: *mut PyObject) -> *mut PyTypeObject {
     #[cfg(not(GraalPy))]
     return (*ob).ob_type;
@@ -189,36 +215,45 @@ pub unsafe fn Py_TYPE(ob: *mut PyObject) -> *mut PyTypeObject {
     return _Py_TYPE(ob);
 }
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-#[cfg(Py_3_14)]
-extern "C" {
+#[cfg(all(Py_LIMITED_API, Py_3_14))]
+extern_libpython! {
     #[cfg_attr(PyPy, link_name = "PyPy_TYPE")]
     pub fn Py_TYPE(ob: *mut PyObject) -> *mut PyTypeObject;
 }
 
 // skip _Py_TYPE compat shim
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPyLong_Type")]
+#[cfg(not(RustPython))]
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyLong_Type")]
     pub static mut PyLong_Type: PyTypeObject;
-    #[cfg_attr(PyPy, link_name = "PyPyBool_Type")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyBool_Type")]
     pub static mut PyBool_Type: PyTypeObject;
 }
 
+#[cfg(not(all(Py_LIMITED_API, Py_3_15)))]
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn Py_SIZE(ob: *mut PyObject) -> Py_ssize_t {
     #[cfg(not(GraalPy))]
     {
-        debug_assert_ne!((*ob).ob_type, std::ptr::addr_of_mut!(crate::PyLong_Type));
-        debug_assert_ne!((*ob).ob_type, std::ptr::addr_of_mut!(crate::PyBool_Type));
+        debug_assert_ne!((*ob).ob_type, &raw mut crate::PyLong_Type);
+        debug_assert_ne!((*ob).ob_type, &raw mut crate::PyBool_Type);
         (*ob.cast::<PyVarObject>()).ob_size
     }
     #[cfg(GraalPy)]
     _Py_SIZE(ob)
 }
 
+extern_libpython! {
+    #[cfg(RustPython)]
+    pub fn Py_SIZE(ob: *mut PyObject) -> Py_ssize_t;
+    #[cfg(any(all(Py_LIMITED_API, Py_3_15), RustPython))]
+    pub fn Py_IS_TYPE(ob: *mut PyObject, tp: *mut PyTypeObject) -> c_int;
+}
+
 #[inline]
+#[cfg(not(any(all(Py_LIMITED_API, Py_3_15), RustPython)))]
 pub unsafe fn Py_IS_TYPE(ob: *mut PyObject, tp: *mut PyTypeObject) -> c_int {
     (Py_TYPE(ob) == tp) as c_int
 }
@@ -257,6 +292,14 @@ pub type hashfunc = unsafe extern "C" fn(*mut PyObject) -> Py_hash_t;
 pub type richcmpfunc = unsafe extern "C" fn(*mut PyObject, *mut PyObject, c_int) -> *mut PyObject;
 pub type getiterfunc = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
 pub type iternextfunc = unsafe extern "C" fn(*mut PyObject) -> *mut PyObject;
+#[cfg(Py_3_15)]
+#[repr(C)]
+pub struct _PyObjectIndexPair {
+    pub object: *mut PyObject,
+    pub index: Py_ssize_t,
+}
+#[cfg(Py_3_15)]
+pub type _Py_iteritemfunc = unsafe extern "C" fn(*mut PyObject, Py_ssize_t) -> _PyObjectIndexPair;
 pub type descrgetfunc =
     unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject) -> *mut PyObject;
 pub type descrsetfunc = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyObject) -> c_int;
@@ -264,8 +307,6 @@ pub type initproc = unsafe extern "C" fn(*mut PyObject, *mut PyObject, *mut PyOb
 pub type newfunc =
     unsafe extern "C" fn(*mut PyTypeObject, *mut PyObject, *mut PyObject) -> *mut PyObject;
 pub type allocfunc = unsafe extern "C" fn(*mut PyTypeObject, Py_ssize_t) -> *mut PyObject;
-
-#[cfg(Py_3_8)]
 pub type vectorcallfunc = unsafe extern "C" fn(
     callable: *mut PyObject,
     args: *const *mut PyObject,
@@ -282,6 +323,7 @@ pub struct PyType_Slot {
 
 impl Default for PyType_Slot {
     fn default() -> PyType_Slot {
+        // SAFETY: CPython treats a zeroed slot as a sentinel value to mean the end of the slots array.
         unsafe { mem::zeroed() }
     }
 }
@@ -296,44 +338,38 @@ pub struct PyType_Spec {
     pub slots: *mut PyType_Slot,
 }
 
-impl Default for PyType_Spec {
-    fn default() -> PyType_Spec {
-        unsafe { mem::zeroed() }
-    }
-}
-
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPyType_FromSpec")]
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_FromSpec")]
     pub fn PyType_FromSpec(arg1: *mut PyType_Spec) -> *mut PyObject;
 
-    #[cfg_attr(PyPy, link_name = "PyPyType_FromSpecWithBases")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_FromSpecWithBases")]
     pub fn PyType_FromSpecWithBases(arg1: *mut PyType_Spec, arg2: *mut PyObject) -> *mut PyObject;
 
-    #[cfg_attr(PyPy, link_name = "PyPyType_GetSlot")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GetSlot")]
     pub fn PyType_GetSlot(arg1: *mut PyTypeObject, arg2: c_int) -> *mut c_void;
 
-    #[cfg(any(Py_3_10, all(Py_3_9, not(Py_LIMITED_API))))]
-    #[cfg_attr(PyPy, link_name = "PyPyType_FromModuleAndSpec")]
+    #[cfg(any(Py_3_10, not(Py_LIMITED_API)))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_FromModuleAndSpec")]
     pub fn PyType_FromModuleAndSpec(
         module: *mut PyObject,
         spec: *mut PyType_Spec,
         bases: *mut PyObject,
     ) -> *mut PyObject;
 
-    #[cfg(any(Py_3_10, all(Py_3_9, not(Py_LIMITED_API))))]
-    #[cfg_attr(PyPy, link_name = "PyPyType_GetModule")]
+    #[cfg(any(Py_3_10, not(Py_LIMITED_API)))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GetModule")]
     pub fn PyType_GetModule(arg1: *mut PyTypeObject) -> *mut PyObject;
 
-    #[cfg(any(Py_3_10, all(Py_3_9, not(Py_LIMITED_API))))]
-    #[cfg_attr(PyPy, link_name = "PyPyType_GetModuleState")]
+    #[cfg(any(Py_3_10, not(Py_LIMITED_API)))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GetModuleState")]
     pub fn PyType_GetModuleState(arg1: *mut PyTypeObject) -> *mut c_void;
 
     #[cfg(Py_3_11)]
-    #[cfg_attr(PyPy, link_name = "PyPyType_GetName")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GetName")]
     pub fn PyType_GetName(arg1: *mut PyTypeObject) -> *mut PyObject;
 
     #[cfg(Py_3_11)]
-    #[cfg_attr(PyPy, link_name = "PyPyType_GetQualName")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GetQualName")]
     pub fn PyType_GetQualName(arg1: *mut PyTypeObject) -> *mut PyObject;
 
     #[cfg(Py_3_13)]
@@ -345,7 +381,7 @@ extern "C" {
     pub fn PyType_GetModuleName(arg1: *mut PyTypeObject) -> *mut PyObject;
 
     #[cfg(Py_3_12)]
-    #[cfg_attr(PyPy, link_name = "PyPyType_FromMetaclass")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_FromMetaclass")]
     pub fn PyType_FromMetaclass(
         metaclass: *mut PyTypeObject,
         module: *mut PyObject,
@@ -354,14 +390,25 @@ extern "C" {
     ) -> *mut PyObject;
 
     #[cfg(Py_3_12)]
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GetTypeData")]
     pub fn PyObject_GetTypeData(obj: *mut PyObject, cls: *mut PyTypeObject) -> *mut c_void;
 
     #[cfg(Py_3_12)]
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GetTypeDataSize")]
-    pub fn PyObject_GetTypeDataSize(cls: *mut PyTypeObject) -> Py_ssize_t;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GetTypeDataSize")]
+    pub fn PyType_GetTypeDataSize(cls: *mut PyTypeObject) -> Py_ssize_t;
 
-    #[cfg_attr(PyPy, link_name = "PyPyType_IsSubtype")]
+    #[cfg(Py_3_14)]
+    #[cfg_attr(PyPy, link_name = "PyPyType_GetBaseByToken")]
+    pub fn PyType_GetBaseByToken(
+        type_: *mut PyTypeObject,
+        token: *mut c_void,
+        result: *mut *mut PyTypeObject,
+    ) -> c_int;
+
+    #[cfg(Py_3_15)]
+    #[cfg_attr(PyPy, link_name = "PyPyType_FromSlot")]
+    pub fn PyType_FromSlots(slots: *mut PySlot) -> *mut PyObject;
+
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_IsSubtype")]
     pub fn PyType_IsSubtype(a: *mut PyTypeObject, b: *mut PyTypeObject) -> c_int;
 }
 
@@ -370,55 +417,55 @@ pub unsafe fn PyObject_TypeCheck(ob: *mut PyObject, tp: *mut PyTypeObject) -> c_
     (Py_IS_TYPE(ob, tp) != 0 || PyType_IsSubtype(Py_TYPE(ob), tp) != 0) as c_int
 }
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
+extern_libpython! {
     /// built-in 'type'
-    #[cfg_attr(PyPy, link_name = "PyPyType_Type")]
+    #[cfg(not(RustPython))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_Type")]
     pub static mut PyType_Type: PyTypeObject;
     /// built-in 'object'
-    #[cfg_attr(PyPy, link_name = "PyPyBaseObject_Type")]
+    #[cfg(not(RustPython))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyBaseObject_Type")]
     pub static mut PyBaseObject_Type: PyTypeObject;
     /// built-in 'super'
+    #[cfg(not(RustPython))]
     pub static mut PySuper_Type: PyTypeObject;
-}
 
-extern "C" {
     pub fn PyType_GetFlags(arg1: *mut PyTypeObject) -> c_ulong;
 
-    #[cfg_attr(PyPy, link_name = "PyPyType_Ready")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_Ready")]
     pub fn PyType_Ready(t: *mut PyTypeObject) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyType_GenericAlloc")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GenericAlloc")]
     pub fn PyType_GenericAlloc(t: *mut PyTypeObject, nitems: Py_ssize_t) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyType_GenericNew")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_GenericNew")]
     pub fn PyType_GenericNew(
         t: *mut PyTypeObject,
         args: *mut PyObject,
         kwds: *mut PyObject,
     ) -> *mut PyObject;
     pub fn PyType_ClearCache() -> c_uint;
-    #[cfg_attr(PyPy, link_name = "PyPyType_Modified")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyType_Modified")]
     pub fn PyType_Modified(t: *mut PyTypeObject);
 
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Repr")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Repr")]
     pub fn PyObject_Repr(o: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Str")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Str")]
     pub fn PyObject_Str(o: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_ASCII")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_ASCII")]
     pub fn PyObject_ASCII(arg1: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Bytes")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Bytes")]
     pub fn PyObject_Bytes(arg1: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_RichCompare")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_RichCompare")]
     pub fn PyObject_RichCompare(
         arg1: *mut PyObject,
         arg2: *mut PyObject,
         arg3: c_int,
     ) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_RichCompareBool")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_RichCompareBool")]
     pub fn PyObject_RichCompareBool(arg1: *mut PyObject, arg2: *mut PyObject, arg3: c_int)
-        -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GetAttrString")]
+    -> c_int;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GetAttrString")]
     pub fn PyObject_GetAttrString(arg1: *mut PyObject, arg2: *const c_char) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_SetAttrString")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_SetAttrString")]
     pub fn PyObject_SetAttrString(
         arg1: *mut PyObject,
         arg2: *const c_char,
@@ -427,9 +474,9 @@ extern "C" {
     #[cfg(any(Py_3_13, all(PyPy, not(Py_3_11))))] // CPython defined in 3.12 as an inline function in abstract.h
     #[cfg_attr(PyPy, link_name = "PyPyObject_DelAttrString")]
     pub fn PyObject_DelAttrString(arg1: *mut PyObject, arg2: *const c_char) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_HasAttrString")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_HasAttrString")]
     pub fn PyObject_HasAttrString(arg1: *mut PyObject, arg2: *const c_char) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GetAttr")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GetAttr")]
     pub fn PyObject_GetAttr(arg1: *mut PyObject, arg2: *mut PyObject) -> *mut PyObject;
     #[cfg(Py_3_13)]
     #[cfg_attr(PyPy, link_name = "PyPyObject_GetOptionalAttr")]
@@ -445,13 +492,13 @@ extern "C" {
         arg2: *const c_char,
         arg3: *mut *mut PyObject,
     ) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_SetAttr")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_SetAttr")]
     pub fn PyObject_SetAttr(arg1: *mut PyObject, arg2: *mut PyObject, arg3: *mut PyObject)
-        -> c_int;
+    -> c_int;
     #[cfg(any(Py_3_13, all(PyPy, not(Py_3_11))))] // CPython defined in 3.12 as an inline function in abstract.h
     #[cfg_attr(PyPy, link_name = "PyPyObject_DelAttr")]
     pub fn PyObject_DelAttr(arg1: *mut PyObject, arg2: *mut PyObject) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_HasAttr")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_HasAttr")]
     pub fn PyObject_HasAttr(arg1: *mut PyObject, arg2: *mut PyObject) -> c_int;
     #[cfg(Py_3_13)]
     #[cfg_attr(PyPy, link_name = "PyPyObject_HasAttrWithError")]
@@ -459,41 +506,43 @@ extern "C" {
     #[cfg(Py_3_13)]
     #[cfg_attr(PyPy, link_name = "PyPyObject_HasAttrStringWithError")]
     pub fn PyObject_HasAttrStringWithError(arg1: *mut PyObject, arg2: *const c_char) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_SelfIter")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_SelfIter")]
     pub fn PyObject_SelfIter(arg1: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GenericGetAttr")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GenericGetAttr")]
     pub fn PyObject_GenericGetAttr(arg1: *mut PyObject, arg2: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GenericSetAttr")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GenericSetAttr")]
     pub fn PyObject_GenericSetAttr(
         arg1: *mut PyObject,
         arg2: *mut PyObject,
         arg3: *mut PyObject,
     ) -> c_int;
     #[cfg(not(all(Py_LIMITED_API, not(Py_3_10))))]
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GenericGetDict")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GenericGetDict")]
     pub fn PyObject_GenericGetDict(arg1: *mut PyObject, arg2: *mut c_void) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_GenericSetDict")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_GenericSetDict")]
     pub fn PyObject_GenericSetDict(
         arg1: *mut PyObject,
         arg2: *mut PyObject,
         arg3: *mut c_void,
     ) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Hash")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Hash")]
     pub fn PyObject_Hash(arg1: *mut PyObject) -> Py_hash_t;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_HashNotImplemented")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_HashNotImplemented")]
     pub fn PyObject_HashNotImplemented(arg1: *mut PyObject) -> Py_hash_t;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_IsTrue")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_IsTrue")]
     pub fn PyObject_IsTrue(arg1: *mut PyObject) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Not")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Not")]
     pub fn PyObject_Not(arg1: *mut PyObject) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyCallable_Check")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyCallable_Check")]
     pub fn PyCallable_Check(arg1: *mut PyObject) -> c_int;
-    #[cfg_attr(PyPy, link_name = "PyPyObject_ClearWeakRefs")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_ClearWeakRefs")]
     pub fn PyObject_ClearWeakRefs(arg1: *mut PyObject);
 
-    #[cfg_attr(PyPy, link_name = "PyPyObject_Dir")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyObject_Dir")]
     pub fn PyObject_Dir(arg1: *mut PyObject) -> *mut PyObject;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPy_ReprEnter")]
     pub fn Py_ReprEnter(arg1: *mut PyObject) -> c_int;
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPy_ReprLeave")]
     pub fn Py_ReprLeave(arg1: *mut PyObject);
 }
 
@@ -528,7 +577,7 @@ pub const Py_TPFLAGS_HEAPTYPE: c_ulong = 1 << 9;
 pub const Py_TPFLAGS_BASETYPE: c_ulong = 1 << 10;
 
 /// Set if the type implements the vectorcall protocol (PEP 590)
-#[cfg(any(Py_3_12, all(Py_3_8, not(Py_LIMITED_API))))]
+#[cfg(any(Py_3_12, not(Py_LIMITED_API)))]
 pub const Py_TPFLAGS_HAVE_VECTORCALL: c_ulong = 1 << 11;
 // skipped backwards-compatibility alias _Py_TPFLAGS_HAVE_VECTORCALL
 
@@ -542,8 +591,6 @@ pub const Py_TPFLAGS_READYING: c_ulong = 1 << 13;
 pub const Py_TPFLAGS_HAVE_GC: c_ulong = 1 << 14;
 
 const Py_TPFLAGS_HAVE_STACKLESS_EXTENSION: c_ulong = 0;
-
-#[cfg(Py_3_8)]
 pub const Py_TPFLAGS_METHOD_DESCRIPTOR: c_ulong = 1 << 17;
 
 pub const Py_TPFLAGS_VALID_VERSION_TAG: c_ulong = 1 << 19;
@@ -595,19 +642,16 @@ pub const Py_CONSTANT_EMPTY_BYTES: c_uint = 8;
 #[cfg(Py_3_13)]
 pub const Py_CONSTANT_EMPTY_TUPLE: c_uint = 9;
 
-extern "C" {
+extern_libpython! {
     #[cfg(Py_3_13)]
     #[cfg_attr(PyPy, link_name = "PyPy_GetConstant")]
     pub fn Py_GetConstant(constant_id: c_uint) -> *mut PyObject;
     #[cfg(Py_3_13)]
     #[cfg_attr(PyPy, link_name = "PyPy_GetConstantBorrowed")]
     pub fn Py_GetConstantBorrowed(constant_id: c_uint) -> *mut PyObject;
-}
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
     #[cfg(all(not(GraalPy), not(all(Py_3_13, Py_LIMITED_API))))]
-    #[cfg_attr(PyPy, link_name = "_PyPy_NoneStruct")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPy_NoneStruct")]
     static mut _Py_NoneStruct: PyObject;
 
     #[cfg(GraalPy)]
@@ -620,7 +664,7 @@ pub unsafe fn Py_None() -> *mut PyObject {
     return Py_GetConstantBorrowed(Py_CONSTANT_NONE);
 
     #[cfg(all(not(GraalPy), not(all(Py_3_13, Py_LIMITED_API))))]
-    return ptr::addr_of_mut!(_Py_NoneStruct);
+    return &raw mut _Py_NoneStruct;
 
     #[cfg(GraalPy)]
     return _Py_NoneStructReference;
@@ -633,10 +677,9 @@ pub unsafe fn Py_IsNone(x: *mut PyObject) -> c_int {
 
 // skipped Py_RETURN_NONE
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
+extern_libpython! {
     #[cfg(all(not(GraalPy), not(all(Py_3_13, Py_LIMITED_API))))]
-    #[cfg_attr(PyPy, link_name = "_PyPy_NotImplementedStruct")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPy_NotImplementedStruct")]
     static mut _Py_NotImplementedStruct: PyObject;
 
     #[cfg(GraalPy)]
@@ -649,7 +692,7 @@ pub unsafe fn Py_NotImplemented() -> *mut PyObject {
     return Py_GetConstantBorrowed(Py_CONSTANT_NOT_IMPLEMENTED);
 
     #[cfg(all(not(GraalPy), not(all(Py_3_13, Py_LIMITED_API))))]
-    return ptr::addr_of_mut!(_Py_NotImplementedStruct);
+    return &raw mut _Py_NotImplementedStruct;
 
     #[cfg(GraalPy)]
     return _Py_NotImplementedStructReference;
@@ -682,7 +725,7 @@ pub unsafe fn PyType_HasFeature(ty: *mut PyTypeObject, feature: c_ulong) -> c_in
     let flags = PyType_GetFlags(ty);
 
     #[cfg(all(not(Py_LIMITED_API), Py_GIL_DISABLED))]
-    let flags = (*ty).tp_flags.load(std::sync::atomic::Ordering::Relaxed);
+    let flags = (*ty).tp_flags.load(core::sync::atomic::Ordering::Relaxed);
 
     #[cfg(all(not(Py_LIMITED_API), not(Py_GIL_DISABLED)))]
     let flags = (*ty).tp_flags;
@@ -691,11 +734,13 @@ pub unsafe fn PyType_HasFeature(ty: *mut PyTypeObject, feature: c_ulong) -> c_in
 }
 
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn PyType_FastSubclass(t: *mut PyTypeObject, f: c_ulong) -> c_int {
     PyType_HasFeature(t, f)
 }
 
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn PyType_Check(op: *mut PyObject) -> c_int {
     PyType_FastSubclass(Py_TYPE(op), Py_TPFLAGS_TYPE_SUBCLASS)
 }
@@ -703,11 +748,17 @@ pub unsafe fn PyType_Check(op: *mut PyObject) -> c_int {
 // skipped _PyType_CAST
 
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn PyType_CheckExact(op: *mut PyObject) -> c_int {
-    Py_IS_TYPE(op, ptr::addr_of_mut!(PyType_Type))
+    Py_IS_TYPE(op, &raw mut PyType_Type)
 }
 
-extern "C" {
+extern_libpython! {
+    #[cfg(RustPython)]
+    pub fn PyType_Check(op: *mut PyObject) -> c_int;
+    #[cfg(RustPython)]
+    pub fn PyType_CheckExact(op: *mut PyObject) -> c_int;
+
     #[cfg(any(Py_3_13, all(Py_3_11, not(Py_LIMITED_API))))]
     #[cfg_attr(PyPy, link_name = "PyPyType_GetModuleByDef")]
     pub fn PyType_GetModuleByDef(
@@ -717,4 +768,34 @@ extern "C" {
 
     #[cfg(Py_3_14)]
     pub fn PyType_Freeze(tp: *mut crate::PyTypeObject) -> c_int;
+
+    #[cfg(any(Py_3_15, not(Py_LIMITED_API)))]
+    #[cfg_attr(PyPy, link_name = "PyPyObject_CallFinalizerFromDealloc")]
+    pub fn PyObject_CallFinalizerFromDealloc(arg1: *mut crate::PyObject) -> c_int;
+
+    #[cfg(Py_3_15)]
+    pub fn PyType_GetModuleByToken(_type: *mut PyTypeObject, token: *const c_void)
+    -> *mut PyObject;
+
+    #[cfg(Py_3_15)]
+    pub fn PyObject_GetTypeData_DuringGC(o: *mut PyObject, cls: *mut PyTypeObject) -> *mut c_void;
+
+    #[cfg(Py_3_15)]
+    pub fn PyType_GetModuleState_DuringGC(type_: *mut PyTypeObject) -> *mut c_void;
+
+    #[cfg(Py_3_15)]
+    pub fn PyType_GetBaseByToken_DuringGC(
+        type_: *mut PyTypeObject,
+        tp_token: *mut c_void,
+        result: *mut *mut PyTypeObject,
+    ) -> c_int;
+
+    #[cfg(Py_3_15)]
+    pub fn PyType_GetModule_DuringGC(type_: *mut PyTypeObject) -> *mut PyObject;
+
+    #[cfg(Py_3_15)]
+    pub fn PyType_GetModuleByToken_DuringGC(
+        type_: *mut PyTypeObject,
+        mod_token: *const c_void,
+    ) -> *mut PyObject;
 }

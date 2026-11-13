@@ -1,7 +1,7 @@
 use crate::object::{PyObject, PyTypeObject};
 #[cfg(not(PyPy))]
 use crate::pyport::Py_ssize_t;
-use std::ffi::{c_char, c_int};
+use core::ffi::{c_char, c_int};
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -19,9 +19,13 @@ pub struct PyStructSequence_Desc {
     pub n_in_sequence: c_int,
 }
 
-// skipped PyStructSequence_UnnamedField;
+extern_libpython! {
+    #[cfg(any(Py_3_11, not(Py_LIMITED_API)))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyStructSequence_UnnamedField")]
+    pub static PyStructSequence_UnnamedField: *const c_char;
+}
 
-extern "C" {
+extern_libpython! {
     #[cfg(not(Py_LIMITED_API))]
     #[cfg_attr(PyPy, link_name = "PyPyStructSequence_InitType")]
     pub fn PyStructSequence_InitType(_type: *mut PyTypeObject, desc: *mut PyStructSequence_Desc);
@@ -35,7 +39,7 @@ extern "C" {
 
     #[cfg(not(PyPy))]
     pub fn PyStructSequence_NewType(desc: *mut PyStructSequence_Desc) -> *mut PyTypeObject;
-    #[cfg_attr(PyPy, link_name = "PyPyStructSequence_New")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyStructSequence_New")]
     pub fn PyStructSequence_New(_type: *mut PyTypeObject) -> *mut PyObject;
 }
 
@@ -54,7 +58,7 @@ pub unsafe fn PyStructSequence_GET_ITEM(op: *mut PyObject, i: Py_ssize_t) -> *mu
     crate::PyTuple_GET_ITEM(op, i)
 }
 
-extern "C" {
+extern_libpython! {
     #[cfg(not(PyPy))]
     pub fn PyStructSequence_SetItem(arg1: *mut PyObject, arg2: Py_ssize_t, arg3: *mut PyObject);
 

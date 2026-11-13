@@ -1,39 +1,45 @@
 use crate::object::*;
-use std::ffi::{c_double, c_int};
-use std::ptr::addr_of_mut;
+use core::ffi::{c_double, c_int};
 
 #[cfg(Py_LIMITED_API)]
 // TODO: remove (see https://github.com/PyO3/pyo3/pull/1341#issuecomment-751515985)
 opaque_struct!(pub PyFloatObject);
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPyFloat_Type")]
+extern_libpython! {
+    #[cfg(not(RustPython))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyFloat_Type")]
     pub static mut PyFloat_Type: PyTypeObject;
+
+    #[cfg(RustPython)]
+    pub fn PyFloat_Check(op: *mut PyObject) -> c_int;
+    #[cfg(RustPython)]
+    pub fn PyFloat_CheckExact(op: *mut PyObject) -> c_int;
 }
 
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn PyFloat_Check(op: *mut PyObject) -> c_int {
-    PyObject_TypeCheck(op, addr_of_mut!(PyFloat_Type))
+    PyObject_TypeCheck(op, &raw mut PyFloat_Type)
 }
 
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn PyFloat_CheckExact(op: *mut PyObject) -> c_int {
-    (Py_TYPE(op) == addr_of_mut!(PyFloat_Type)) as c_int
+    Py_IS_TYPE(op, &raw mut PyFloat_Type)
 }
 
 // skipped Py_RETURN_NAN
 // skipped Py_RETURN_INF
 
-extern "C" {
+extern_libpython! {
     pub fn PyFloat_GetMax() -> c_double;
     pub fn PyFloat_GetMin() -> c_double;
     pub fn PyFloat_GetInfo() -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyFloat_FromString")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyFloat_FromString")]
     pub fn PyFloat_FromString(arg1: *mut PyObject) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyFloat_FromDouble")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyFloat_FromDouble")]
     pub fn PyFloat_FromDouble(arg1: c_double) -> *mut PyObject;
-    #[cfg_attr(PyPy, link_name = "PyPyFloat_AsDouble")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyFloat_AsDouble")]
     pub fn PyFloat_AsDouble(arg1: *mut PyObject) -> c_double;
 }
 

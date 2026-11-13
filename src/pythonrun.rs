@@ -1,22 +1,23 @@
 use crate::object::*;
+#[cfg(any(Py_LIMITED_API, not(Py_3_10), PyPy, GraalPy))]
+use core::ffi::c_char;
+use core::ffi::c_int;
 #[cfg(not(any(PyPy, Py_LIMITED_API, Py_3_10)))]
 use libc::FILE;
-#[cfg(any(Py_LIMITED_API, not(Py_3_10), PyPy, GraalPy))]
-use std::ffi::c_char;
-use std::ffi::c_int;
 
-extern "C" {
+extern_libpython! {
     #[cfg(any(all(Py_LIMITED_API, not(PyPy)), GraalPy))]
     pub fn Py_CompileString(string: *const c_char, p: *const c_char, s: c_int) -> *mut PyObject;
 
-    #[cfg_attr(PyPy, link_name = "PyPyErr_Print")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyErr_Print")]
     pub fn PyErr_Print();
-    #[cfg_attr(PyPy, link_name = "PyPyErr_PrintEx")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyErr_PrintEx")]
     pub fn PyErr_PrintEx(arg1: c_int);
-    #[cfg_attr(PyPy, link_name = "PyPyErr_Display")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyErr_Display")]
     pub fn PyErr_Display(arg1: *mut PyObject, arg2: *mut PyObject, arg3: *mut PyObject);
 
     #[cfg(Py_3_12)]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPyErr_DisplayException")]
     pub fn PyErr_DisplayException(exc: *mut PyObject);
 }
 
@@ -27,19 +28,19 @@ pub unsafe fn Py_CompileString(string: *const c_char, p: *const c_char, s: c_int
     // is only available in the non-limited API and has a real definition for all versions in
     // the cpython/ subdirectory.
     #[cfg(Py_LIMITED_API)]
-    extern "C" {
+    extern_libpython! {
         #[link_name = "PyPy_CompileStringFlags"]
         pub fn Py_CompileStringFlags(
             string: *const c_char,
             p: *const c_char,
             s: c_int,
-            f: *mut std::ffi::c_void, // Actually *mut Py_CompilerFlags in the real definition
+            f: *mut core::ffi::c_void, // Actually *mut Py_CompilerFlags in the real definition
         ) -> *mut PyObject;
     }
     #[cfg(not(Py_LIMITED_API))]
     use crate::Py_CompileStringFlags;
 
-    Py_CompileStringFlags(string, p, s, std::ptr::null_mut())
+    Py_CompileStringFlags(string, p, s, core::ptr::null_mut())
 }
 
 // skipped PyOS_InputHook
@@ -57,7 +58,7 @@ opaque_struct!(pub symtable);
 opaque_struct!(pub _node);
 
 #[cfg(not(any(PyPy, Py_LIMITED_API, Py_3_10)))]
-#[cfg_attr(Py_3_9, deprecated(note = "Python 3.9"))]
+#[deprecated(note = "Python 3.9")]
 #[inline]
 pub unsafe fn PyParser_SimpleParseString(s: *const c_char, b: c_int) -> *mut _node {
     #[allow(deprecated)]
@@ -65,14 +66,14 @@ pub unsafe fn PyParser_SimpleParseString(s: *const c_char, b: c_int) -> *mut _no
 }
 
 #[cfg(not(any(PyPy, Py_LIMITED_API, Py_3_10)))]
-#[cfg_attr(Py_3_9, deprecated(note = "Python 3.9"))]
+#[deprecated(note = "Python 3.9")]
 #[inline]
 pub unsafe fn PyParser_SimpleParseFile(fp: *mut FILE, s: *const c_char, b: c_int) -> *mut _node {
     #[allow(deprecated)]
     crate::PyParser_SimpleParseFileFlags(fp, s, b, 0)
 }
 
-extern "C" {
+extern_libpython! {
     #[cfg(not(any(PyPy, Py_3_10)))]
     pub fn Py_SymtableString(
         str: *const c_char,

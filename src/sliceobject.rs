@@ -1,12 +1,10 @@
 use crate::object::*;
 use crate::pyport::Py_ssize_t;
-use std::ffi::c_int;
-use std::ptr::addr_of_mut;
+use core::ffi::c_int;
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
-    #[cfg(not(GraalPy))]
-    #[cfg_attr(PyPy, link_name = "_PyPy_EllipsisObject")]
+extern_libpython! {
+    #[cfg(all(not(GraalPy), not(all(Py_3_13, Py_LIMITED_API))))]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "_PyPy_EllipsisObject")]
     static mut _Py_EllipsisObject: PyObject;
 
     #[cfg(GraalPy)]
@@ -15,8 +13,12 @@ extern "C" {
 
 #[inline]
 pub unsafe fn Py_Ellipsis() -> *mut PyObject {
-    #[cfg(not(GraalPy))]
-    return addr_of_mut!(_Py_EllipsisObject);
+    #[cfg(all(not(GraalPy), all(Py_3_13, Py_LIMITED_API)))]
+    return Py_GetConstantBorrowed(Py_CONSTANT_ELLIPSIS);
+
+    #[cfg(all(not(GraalPy), not(all(Py_3_13, Py_LIMITED_API))))]
+    return &raw mut _Py_EllipsisObject;
+
     #[cfg(GraalPy)]
     return _Py_EllipsisObjectReference;
 }
@@ -33,20 +35,24 @@ pub struct PySliceObject {
     pub step: *mut PyObject,
 }
 
-#[cfg_attr(windows, link(name = "pythonXY"))]
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPySlice_Type")]
+#[cfg(not(RustPython))]
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPySlice_Type")]
     pub static mut PySlice_Type: PyTypeObject;
     pub static mut PyEllipsis_Type: PyTypeObject;
 }
 
 #[inline]
+#[cfg(not(RustPython))]
 pub unsafe fn PySlice_Check(op: *mut PyObject) -> c_int {
-    (Py_TYPE(op) == addr_of_mut!(PySlice_Type)) as c_int
+    Py_IS_TYPE(op, &raw mut PySlice_Type)
 }
 
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPySlice_New")]
+extern_libpython! {
+    #[cfg(RustPython)]
+    pub fn PySlice_Check(op: *mut PyObject) -> c_int;
+
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPySlice_New")]
     pub fn PySlice_New(
         start: *mut PyObject,
         stop: *mut PyObject,
@@ -56,7 +62,7 @@ extern "C" {
     // skipped non-limited _PySlice_FromIndices
     // skipped non-limited _PySlice_GetLongIndices
 
-    #[cfg_attr(PyPy, link_name = "PyPySlice_GetIndices")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPySlice_GetIndices")]
     pub fn PySlice_GetIndices(
         r: *mut PyObject,
         length: Py_ssize_t,
@@ -84,8 +90,8 @@ pub unsafe fn PySlice_GetIndicesEx(
     }
 }
 
-extern "C" {
-    #[cfg_attr(PyPy, link_name = "PyPySlice_Unpack")]
+extern_libpython! {
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPySlice_Unpack")]
     pub fn PySlice_Unpack(
         slice: *mut PyObject,
         start: *mut Py_ssize_t,
@@ -93,7 +99,7 @@ extern "C" {
         step: *mut Py_ssize_t,
     ) -> c_int;
 
-    #[cfg_attr(PyPy, link_name = "PyPySlice_AdjustIndices")]
+    #[cfg_attr(all(PyPy, not(Py_3_12)), link_name = "PyPySlice_AdjustIndices")]
     pub fn PySlice_AdjustIndices(
         length: Py_ssize_t,
         start: *mut Py_ssize_t,

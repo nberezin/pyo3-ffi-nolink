@@ -1,13 +1,13 @@
 #[cfg(not(GraalPy))]
-use crate::cpython::code::PyCodeObject;
+use crate::PyCodeObject;
+use crate::PyFrameObject;
+#[cfg(not(GraalPy))]
+use crate::PyThreadState;
 #[cfg(not(GraalPy))]
 use crate::object::*;
-#[cfg(not(GraalPy))]
-use crate::pystate::PyThreadState;
-use crate::PyFrameObject;
 #[cfg(not(any(PyPy, GraalPy, Py_3_11)))]
-use std::ffi::c_char;
-use std::ffi::c_int;
+use core::ffi::c_char;
+use core::ffi::c_int;
 
 #[cfg(not(any(PyPy, GraalPy, Py_3_11)))]
 pub type PyFrameState = c_char;
@@ -25,7 +25,7 @@ pub struct PyTryBlock {
 // skipped _PyFrame_IsExecuting
 // skipped _PyFrameHasCompleted
 
-extern "C" {
+extern_libpython! {
     #[cfg(not(GraalPy))]
     #[cfg_attr(PyPy, link_name = "PyPyFrame_New")]
     pub fn PyFrame_New(
@@ -45,7 +45,4 @@ extern "C" {
     pub fn PyFrame_FastToLocals(f: *mut PyFrameObject);
 
     // skipped _PyFrame_DebugMallocStats
-
-    #[cfg(not(Py_3_9))]
-    pub fn PyFrame_ClearFreeList() -> c_int;
 }
